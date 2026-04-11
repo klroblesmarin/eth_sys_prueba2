@@ -1,0 +1,5 @@
+biosteam
+thermosteam
+pandas
+google-generativeai
+graphviz 
