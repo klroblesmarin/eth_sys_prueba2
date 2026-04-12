@@ -3,3 +3,4 @@ thermosteam
 pandas
 google-generativeai
 graphviz 
+PyMuPDF
