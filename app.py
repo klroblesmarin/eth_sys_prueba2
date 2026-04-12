@@ -125,26 +125,30 @@ if simular:
             # 4. INTEGRACIÓN IA (OPCIONAL)
             st.subheader("🧠 Análisis Asistido por IA")
             try:
-                def consultar_gemini(tabla_materia, tabla_energia):
-                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                    model = genai.GenerativeModel('gemini-2.5-pro')
-                    
-                    prompt = f"""
-                    Actúa como un experto en Ingeniería Química. Analiza estos resultados de simulación de BioSTEAM:
-                    Balance de Materia: {tabla_materia.to_string()}
-                    Balance de Energía: {tabla_energia.to_string()}
-                    
-                    Explica de forma breve:
-                    1. ¿Es eficiente el proceso?
-                    2. ¿Qué sugiere el consumo energético de las bombas y calentadores?
-                    3. Dame un consejo de optimización.
-                    """
-                    response = model.generate_content(prompt)
-                    return response.text
-                    # ... (código anterior del try) ...
-        except Exception as e:
-            st.error("Fallo en la ejecución de la API de Gemini. Detalles del servidor:")
-            st.code(str(e)) # Esto imprimirá el error técnico exacto
-            st.info("Revisa el mensaje de arriba para diagnosticar el problema.")
+                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                modelo = genai.GenerativeModel("gemini-2.5-pro")
+                
+                prompt = f"""
+                Actúa como un ingeniero químico senior evaluando el reporte técnico de una simulación de separación de etanol.
+                
+                Tabla de Materia:
+                {df_materia.to_markdown(index=False)}
+                
+                Tabla de Energía:
+                {df_energia.to_markdown(index=False)}
+                
+                Proporciona un reporte de 3 párrafos concisos:
+                1. Evalúa la viabilidad técnica del proceso.
+                2. Señala el equipo con mayor consumo energético y su impacto.
+                3. Proporciona una sugerencia técnica directa para optimización termodinámica.
+                """
+                respuesta = modelo.generate_content(prompt)
+                st.success(respuesta.text)
+            except Exception as e:
+                st.error("Fallo en la ejecución de la API de Gemini. Detalles del servidor:")
+                st.code(str(e)) # Esto imprimirá el error técnico exacto
+                st.info("Revisa el mensaje de arriba para diagnosticar el problema.")
+            except Exception as e:
+                st.warning("⚠️ La conexión con la API de Gemini no está configurada correctamente en los Secrets.")        
 else:
     st.info("Ajusta los parámetros en la barra lateral y presiona 'Ejecutar Simulación' para comenzar.")
