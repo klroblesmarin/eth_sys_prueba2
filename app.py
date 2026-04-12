@@ -5,20 +5,20 @@ import pandas as pd
 import google.generativeai as genai
 
 # Configuración inicial de la página
-st.set_page_config(page_title="BioSTEAM Engineering Tutor", layout="wide")
+st.set_page_config(page_title="Simulador BioSTEAM & Tutor IA", layout="wide")
 
 # ===============================================
 # 1. LÓGICA DE SIMULACIÓN Y CÁLCULOS
 # ===============================================
 def run_simulation(params):
-    # Limpiar flujos previos para evitar errores de ID duplicado
+    # Limpiar flujos previos para evitar errores de ID duplicado en Streamlit
     bst.main_flowsheet.clear()
     
     # Configuración de Químicos
     chemicals = tmo.Chemicals(["Water", "Ethanol"])
     bst.settings.set_thermo(chemicals)
 
-    # Precios de Servicios y Productos (Configuración BioSTEAM)
+    # Precios de Servicios
     bst.settings.electricity_price = params['p_luz']
     
     # Corrientes de entrada
@@ -36,106 +36,152 @@ def run_simulation(params):
                          outs=("3_MOSTO_PRE", "DRENAJE"), phase0="l", phase1="l")
     W210.outs[0].T = 85 + 273.15
 
+    # Intercambiador de Calor Auxiliar (Corregido)
     W220 = bst.HXutility("W220", ins=W210-0, outs="Mezcla", T=params['t_w220_out'] + 273.15)
-    # Configurar precio de vapor en la utilidad del W220
-    W220.heat_utilities[0].agent = bst.HeatUtility.get_agent('low_pressure_steam')
+    W220.load_heating_agent(bst.HeatUtility.get_agent('low_pressure_steam'))
     
     V100 = bst.IsenthalpicValve("V100", ins=W220-0, outs="Mezcla_Bif", P=params['p_v100'] * 101325)
     V1 = bst.Flash("V1", ins=V100-0, outs=("Vapor", "Vinazas"), P=101325, Q=0)
     
+    # Condensador (Corregido)
     W310 = bst.HXutility("W310", ins=V1-0, outs="Producto", T=25+273.15)
-    W310.heat_utilities[0].agent = bst.HeatUtility.get_agent('cooling_water')
+    W310.load_cooling_agent(bst.HeatUtility.get_agent('cooling_water'))
 
     P200 = bst.Pump("P200", ins=V1-1, outs=vinazas_retorno, P=3*101325)
 
-    # Definir Sistema
+    # Definir y correr Sistema
     sys = bst.System("planta_etanol", path=(P100, W210, W220, V100, V1, W310, P200))
     sys.simulate()
     
-    # Análisis Económico Simple (Simulado para fines educativos)
+    # Análisis Económico
     prod = sys.flowsheet.stream.Producto
     prod.price = params['p_etanol_vta']
     
-    costo_op = sys.get_cooling_duty() * params['p_agua'] + sys.get_heating_duty() * params['p_vapor']
-    ventas = prod.F_mass * prod.price
-    inversion_inicial = 500000 # Valor base de ejemplo
-    flujo_caja = ventas - costo_op - (mosto.F_mass * mosto.price)
+    # Costos operativos (ajustado de kW a MW y convertido a costo horario según los precios por tonelada/kWh estándar)
+    # Nota: BioSTEAM reporta duty en kJ/hr. Dividimos entre 3600 para kW.
+    calor_enfriamiento_kw = sum([h.duty for u in sys.units for h in u.heat_utilities if h.duty < 0]) / 3600
+    calor_calentamiento_kw = sum([h.duty for u in sys.units for h in u.heat_utilities if h.duty > 0]) / 3600
     
-    roi = (flujo_caja / inversion_inicial) * 100
-    payback = inversion_inicial / flujo_caja if flujo_caja > 0 else float('inf')
-    npv = -inversion_inicial + (flujo_caja / 0.1) # Perpetuidad simplificada al 10%
+    costo_servicios = (abs(calor_enfriamiento_kw) * params['p_agua'] / 1000) + (calor_calentamiento_kw * params['p_vapor'] / 1000)
+    ventas_por_hora = prod.F_mass * prod.price
+    costo_materia_prima = mosto.F_mass * mosto.price
     
-    return sys, prod, {"ROI": roi, "Payback": payback, "NPV": npv, "Costo_Real": costo_op/prod.F_mass if prod.F_mass > 0 else 0}
+    inversion_inicial = 500000 
+    flujo_caja_horario = ventas_por_hora - costo_servicios - costo_materia_prima
+    flujo_caja_anual = flujo_caja_horario * 8000 # asumiendo 8000 horas de operación al año
+    
+    roi = (flujo_caja_anual / inversion_inicial) * 100 if inversion_inicial > 0 else 0
+    payback = inversion_inicial / flujo_caja_anual if flujo_caja_anual > 0 else float('inf')
+    npv = -inversion_inicial + (flujo_caja_anual / 0.1) # Perpetuidad simplificada al 10%
+    
+    costo_real_produccion = (costo_servicios + costo_materia_prima) / prod.F_mass if prod.F_mass > 0 else 0
+
+    return sys, prod, {"ROI": roi, "Payback": payback, "NPV": npv, "Costo_Real": costo_real_produccion}
 
 # ===============================================
 # 2. INTERFAZ STREAMLIT
 # ===============================================
-st.title("👨‍🔬 BioSTEAM Intelligent Interface & IA Tutor")
+st.title("👨‍🔬 Simulador Planta de Etanol & Tutor IA")
 
 with st.sidebar:
     st.header("🎮 Controles de Proceso")
     t_mosto = st.slider("Temp. Alimentación Mosto (°C)", 10, 50, 25)
-    t_w220 = st.slider("Temp. Salida W220 (°C)", 70, 110, 95)
-    p_v100 = st.slider("Presión V100 (atm)", 0.5, 5.0, 1.0)
+    t_w220 = st.slider("Temp. Salida Calentador W220 (°C)", 70, 110, 95)
+    p_v100 = st.slider("Presión Flash V100 (atm)", 0.5, 5.0, 1.0)
     
     st.header("💰 Parámetros Económicos")
-    p_luz = st.slider("Precio Electricidad ($/kWh)", 0.05, 0.5, 0.15)
-    p_vapor = st.slider("Precio Vapor ($/ton)", 10, 50, 20)
+    p_luz = st.slider("Precio Electricidad ($/kWh)", 0.05, 0.50, 0.15)
+    p_vapor = st.slider("Precio Vapor ($/ton)", 10.0, 50.0, 20.0)
     p_agua = st.slider("Precio Agua Enfriamiento ($/ton)", 0.5, 5.0, 1.5)
-    p_mosto_in = st.slider("Costo Materia Prima ($/kg)", 0.1, 2.0, 0.5)
+    p_mosto_in = st.slider("Precio Compra Mosto ($/kg)", 0.1, 2.0, 0.5)
     p_etanol_vta = st.slider("Precio Venta Etanol ($/kg)", 1.0, 5.0, 2.5)
     
     st.markdown("---")
-    tutor_ia = st.toggle("Habilitar Modo Tutor IA")
+    tutor_ia = st.toggle("🤖 Habilitar Modo Tutor IA")
 
-# Ejecución de simulación
+# Recopilar parámetros
 params = {
     't_mosto': t_mosto, 't_w220_out': t_w220, 'p_v100': p_v100,
     'p_luz': p_luz, 'p_vapor': p_vapor, 'p_agua': p_agua,
     'p_mosto_in': p_mosto_in, 'p_etanol_vta': p_etanol_vta
 }
 
+# Ejecutar simulación
 sys, producto, econ = run_simulation(params)
 
+# ===============================================
 # 3. DASHBOARD DE MÉTRICAS (PRODUCTO FINAL)
-st.subheader("📦 Indicadores de Producto Final")
+# ===============================================
+st.subheader("📦 Corriente de Producto Final")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Temperatura", f"{producto.T - 273.15:.2f} °C")
 c2.metric("Presión", f"{producto.P / 101325:.2f} atm")
 c3.metric("Flujo Másico", f"{producto.F_mass:.2f} kg/h")
-c4.metric("Comp. Etanol", f"{(producto.imass['Ethanol']/producto.F_mass)*100:.1f} %")
+# Protección contra división por cero
+pureza_etanol = (producto.imass['Ethanol']/producto.F_mass)*100 if producto.F_mass > 0 else 0
+c4.metric("Composición Etanol", f"{pureza_etanol:.1f} %")
 
 st.subheader("📈 Análisis Financiero")
 e1, e2, e3, e4 = st.columns(4)
-e1.metric("Costo Real", f"${econ['Costo_Real']:.2f} /kg")
-e2.metric("NPV", f"${econ['NPV']:,.0f}")
-e3.metric("Payback", f"{econ['Payback']:.2f} años")
-e4.metric("ROI", f"{econ['ROI']:.1f} %")
+e1.metric("Costo Real Producción", f"${econ['Costo_Real']:.2f} /kg")
+# Sugerimos un precio de venta basado en el costo real + un margen del 30%
+e2.metric("Precio Venta Sugerido", f"${econ['Costo_Real'] * 1.30:.2f} /kg") 
+e3.metric("Payback", f"{econ['Payback']:.2f} años" if econ['Payback'] != float('inf') else "No rentable")
+e4.metric("ROI Anual", f"{econ['ROI']:.1f} %")
+st.caption(f"**NPV Estimado (10% de descuento):** ${econ['NPV']:,.2f}")
 
+# ===============================================
 # 4. TABLAS DE BALANCE
+# ===============================================
 st.markdown("---")
 col_mat, col_en = st.columns(2)
 
 with col_mat:
     st.subheader("📊 Balance de Materia")
-    df_m = pd.DataFrame([{ "ID": s.ID, "Flujo (kg/h)": round(s.F_mass,2), "T (°C)": round(s.T-273.15,1)} for s in sys.streams])
-    st.dataframe(df_m, use_container_width=True)
+    datos_mat = []
+    for s in sys.streams:
+        if s.F_mass > 0:
+            datos_mat.append({
+                "ID": s.ID, 
+                "Flujo (kg/h)": round(s.F_mass,2), 
+                "T (°C)": round(s.T-273.15,1),
+                "P (atm)": round(s.P/101325, 2)
+            })
+    st.dataframe(pd.DataFrame(datos_mat), use_container_width=True)
 
 with col_en:
     st.subheader("⚡ Balance de Energía")
-    df_e = pd.DataFrame([{ "Equipo": u.ID, "Calor (kW)": round(sum([h.duty for h in u.heat_utilities])/3600,2) if u.heat_utilities else 0} for u in sys.units])
-    st.dataframe(df_e, use_container_width=True)
+    datos_en = []
+    for u in sys.units:
+        calor = sum([h.duty for h in u.heat_utilities])/3600 if hasattr(u, 'heat_utilities') and u.heat_utilities else 0
+        potencia = u.power_utility.rate if hasattr(u, 'power_utility') and u.power_utility else 0
+        if abs(calor) > 0.01 or potencia > 0.01:
+            datos_en.append({
+                "Equipo": u.ID, 
+                "Calor Transferido (kW)": round(calor,2),
+                "Trabajo/Eléctrica (kW)": round(potencia,2)
+            })
+    st.dataframe(pd.DataFrame(datos_en), use_container_width=True)
 
-# 5. TUTOR IA (GEMINI)
+# ===============================================
+# 5. DIAGRAMA DE FLUJO
+# ===============================================
+with st.expander("Ver Diagrama de Flujo del Proceso (PFD)"):
+    dot = sys.diagram(format='dot', display=False)
+    st.graphviz_chart(dot)
+
+# ===============================================
+# 6. TUTOR IA (GEMINI)
+# ===============================================
 if tutor_ia:
     st.markdown("---")
-    st.subheader("🤖 Tutor de Ingeniería Química")
+    st.subheader("🤖 Tutor de Ingeniería Química (Gemini)")
     
-    # Configuración de API
     if "GEMINI_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro') # Actualizado al modelo recomendado
         
+        # Inicializar el historial del chat en la sesión
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
@@ -144,30 +190,34 @@ if tutor_ia:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # Chat input
-        if prompt := st.chat_input("Pregúntale al tutor sobre el proceso..."):
+        # Input de usuario
+        if prompt := st.chat_input("Pregúntame sobre los balances, termodinámica o finanzas del proceso..."):
+            # Mostrar lo que escribió el usuario
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
 
-            # Contexto técnico para Gemini
+            # Preparar el contexto técnico en segundo plano para Gemini
             contexto = f"""
-            Resultados actuales: 
-            Flujo producto: {producto.F_mass} kg/h, 
-            Pureza: {(producto.imass['Ethanol']/producto.F_mass)*100}%,
-            ROI: {econ['ROI']}%, NPV: {econ['NPV']}.
-            El usuario pregunta: {prompt}
-            Responde como un tutor experto, explicando la termodinámica o economía detrás del proceso.
+            Eres un tutor de ingeniería química explicando una simulación de BioSTEAM a un estudiante.
+            El proceso es una separación de Etanol y Agua.
+            Variables actuales: Temperatura de alimentación: {params['t_mosto']}°C. Presión flash: {params['p_v100']} atm.
+            Resultados actuales: Flujo de producto: {producto.F_mass:.2f} kg/h, Pureza de Etanol: {pureza_etanol:.1f}%.
+            Indicadores económicos: ROI {econ['ROI']:.1f}%, Costo Real de Producción ${econ['Costo_Real']:.2f}/kg.
+            
+            Pregunta del estudiante: {prompt}
+            
+            Responde de forma clara, didáctica y basada en estos datos. Usa markdown para resaltar conceptos clave.
             """
             
+            # Generar y mostrar respuesta
             with st.chat_message("assistant"):
-                response = model.generate_content(contexto)
-                st.markdown(response.text)
-                st.session_state.messages.append({"role": "assistant", "content": response.text})
+                try:
+                    with st.spinner("Analizando proceso..."):
+                        response = model.generate_content(contexto)
+                        st.markdown(response.text)
+                        st.session_state.messages.append({"role": "assistant", "content": response.text})
+                except Exception as e:
+                    st.error(f"Error al conectar con la IA: {e}")
     else:
-        st.warning("⚠️ Por favor, configura la 'GEMINI_API_KEY' en los Secrets de Streamlit.")
-
-# 6. DIAGRAMA
-with st.expander("Ver Diagrama de Flujo (PFD)"):
-    dot = sys.diagram(format='dot', display=False)
-    st.graphviz_chart(dot)
+        st.warning("⚠️ El tutor está activado, pero falta la clave de la API. Ve a los *Secrets* de Streamlit Cloud y añade `GEMINI_API_KEY = 'tu_clave'`.")
