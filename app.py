@@ -141,5 +141,10 @@ if simular:
                     """
                     response = model.generate_content(prompt)
                     return response.text
+                    # ... (código anterior del try) ...
+        except Exception as e:
+            st.error("Fallo en la ejecución de la API de Gemini. Detalles del servidor:")
+            st.code(str(e)) # Esto imprimirá el error técnico exacto
+            st.info("Revisa el mensaje de arriba para diagnosticar el problema.")
 else:
     st.info("Ajusta los parámetros en la barra lateral y presiona 'Ejecutar Simulación' para comenzar.")
