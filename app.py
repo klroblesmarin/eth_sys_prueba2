@@ -108,4 +108,66 @@ c4.metric("Comp. Etanol", f"{(producto.imass['Ethanol']/producto.F_mass)*100:.1f
 st.subheader("📈 Análisis Financiero")
 e1, e2, e3, e4 = st.columns(4)
 e1.metric("Costo Real", f"${econ['Costo_Real']:.2f} /kg")
-e2.metric("NPV")
+e2.metric("NPV", f"${econ['NPV']:,.0f}")
+e3.metric("Payback", f"{econ['Payback']:.2f} años")
+e4.metric("ROI", f"{econ['ROI']:.1f} %")
+
+# 4. TABLAS DE BALANCE
+st.markdown("---")
+col_mat, col_en = st.columns(2)
+
+with col_mat:
+    st.subheader("📊 Balance de Materia")
+    df_m = pd.DataFrame([{ "ID": s.ID, "Flujo (kg/h)": round(s.F_mass,2), "T (°C)": round(s.T-273.15,1)} for s in sys.streams])
+    st.dataframe(df_m, use_container_width=True)
+
+with col_en:
+    st.subheader("⚡ Balance de Energía")
+    df_e = pd.DataFrame([{ "Equipo": u.ID, "Calor (kW)": round(sum([h.duty for h in u.heat_utilities])/3600,2) if u.heat_utilities else 0} for u in sys.units])
+    st.dataframe(df_e, use_container_width=True)
+
+# 5. TUTOR IA (GEMINI)
+if tutor_ia:
+    st.markdown("---")
+    st.subheader("🤖 Tutor de Ingeniería Química")
+    
+    # Configuración de API
+    if "GEMINI_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-pro')
+        
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        # Mostrar historial
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        # Chat input
+        if prompt := st.chat_input("Pregúntale al tutor sobre el proceso..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            # Contexto técnico para Gemini
+            contexto = f"""
+            Resultados actuales: 
+            Flujo producto: {producto.F_mass} kg/h, 
+            Pureza: {(producto.imass['Ethanol']/producto.F_mass)*100}%,
+            ROI: {econ['ROI']}%, NPV: {econ['NPV']}.
+            El usuario pregunta: {prompt}
+            Responde como un tutor experto, explicando la termodinámica o economía detrás del proceso.
+            """
+            
+            with st.chat_message("assistant"):
+                response = model.generate_content(contexto)
+                st.markdown(response.text)
+                st.session_state.messages.append({"role": "assistant", "content": response.text})
+    else:
+        st.warning("⚠️ Por favor, configura la 'GEMINI_API_KEY' en los Secrets de Streamlit.")
+
+# 6. DIAGRAMA
+with st.expander("Ver Diagrama de Flujo (PFD)"):
+    dot = sys.diagram(format='dot', display=False)
+    st.graphviz_chart(dot)
