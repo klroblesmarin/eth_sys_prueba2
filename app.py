@@ -3,8 +3,7 @@ import biosteam as bst
 import thermosteam as tmo
 import pandas as pd
 import google.generativeai as genai
-import base64 # Necesario para la visualización de PDFs
-import fitz # PyMuPDF: Necesario para renderizar PDFs evadiendo el bloqueo del navegador
+import fitz  # PyMuPDF: Necesario para renderizar PDFs evadiendo el bloqueo del navegador
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Simulador BioSTEAM & Tutor IA", layout="wide")
@@ -42,7 +41,9 @@ def run_simulation(params):
     W220 = bst.HXutility("W220", ins=W210-0, outs="Mezcla", T=params['t_w220_out'] + 273.15)
     
     V100 = bst.IsenthalpicValve("V100", ins=W220-0, outs="Mezcla_Bif", P=params['p_v100'] * 101325)
-    V1 = bst.Flash("V1", ins=V100-0, outs=("Vapor", "Vinazas"), P=101325, Q=0)
+    
+    # CORRECCIÓN 1: Parametrización de la presión del Flash para acoplarse a la válvula
+    V1 = bst.Flash("V1", ins=V100-0, outs=("Vapor", "Vinazas"), P=params['p_v100'] * 101325, Q=0)
     
     # Condensador
     W310 = bst.HXutility("W310", ins=V1-0, outs="Producto", T=25+273.15)
@@ -55,7 +56,7 @@ def run_simulation(params):
     # Simulación
     sys.simulate()
     
-    # --- CORRECCIÓN DEL ERROR NoneType ---
+    # Cálculo de energía
     calor_enfriamiento_kw = 0
     calor_calentamiento_kw = 0
     
@@ -120,7 +121,11 @@ params = {
     'p_mosto_in': p_mosto_in, 'p_etanol_vta': p_etanol_vta
 }
 
+# CORRECCIÓN 2: Control de estado para no perder la simulación al usar el chat
 if boton_ejecutar:
+    st.session_state['simulacion_activa'] = True
+
+if st.session_state.get('simulacion_activa', False):
     try:
         sys, producto, econ = run_simulation(params)
         
@@ -150,7 +155,8 @@ if boton_ejecutar:
             st.dataframe(df_mat, use_container_width=True)
         with col_e:
             st.subheader("⚡ Energía")
-            df_en = pd.DataFrame([{ "Equipo": u.ID, "kW": round(sum([h.duty for h in u.heat_utilities])/3600,2) if u.heat_utilities else 0} for u in sys.units])
+            # CORRECCIÓN 3: Evitar colapso si un equipo devuelve NoneType en duty
+            df_en = pd.DataFrame([{ "Equipo": u.ID, "kW": round(sum([h.duty for h in u.heat_utilities if getattr(h, 'duty', None) is not None])/3600,2) if u.heat_utilities else 0} for u in sys.units])
             st.dataframe(df_en, use_container_width=True)
 
         # 5. TUTOR IA
@@ -159,7 +165,6 @@ if boton_ejecutar:
             st.subheader("🤖 Tutor IA (Gemini)")
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             
-            # Actualización del modelo a 2.5 Pro
             model = genai.GenerativeModel('gemini-2.5-pro')
             
             if "messages" not in st.session_state: st.session_state.messages = []
@@ -191,22 +196,17 @@ st.header("📐 Diagramas de Planta (Estándar ISO)")
 def mostrar_pdf(ruta_archivo):
     """Función auxiliar para rasterizar un PDF a imagen usando PyMuPDF y asegurar su visualización"""
     try:
-        # Abrir el documento PDF
         doc = fitz.open(ruta_archivo)
         
-        # Renderizar cada página del PDF como una imagen
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
             
-            # Matriz para aplicar zoom y mejorar la resolución de la imagen generada
             mat = fitz.Matrix(2, 2) 
             pix = page.get_pixmap(matrix=mat)
             
-            # Convertir los datos de la imagen a formato apto para Streamlit
             img_bytes = pix.tobytes("png")
             st.image(img_bytes, caption=f"Página {page_num + 1} - Renderizado desde Plant 3D", use_container_width=True)
         
-        # Mantener el botón de descarga nativo como contingencia para los archivos fuente
         with open(ruta_archivo, "rb") as f:
             pdf_data = f.read()
             
@@ -215,7 +215,7 @@ def mostrar_pdf(ruta_archivo):
             data=pdf_data,
             file_name=ruta_archivo,
             mime="application/pdf",
-            key=f"btn_{ruta_archivo}" # Llave única requerida por Streamlit para múltiples botones
+            key=f"btn_{ruta_archivo}"
         )
         
     except FileNotFoundError:
@@ -223,15 +223,12 @@ def mostrar_pdf(ruta_archivo):
     except Exception as e:
         st.error(f"❌ Error interno al renderizar el documento: {e}")
 
-# Uso de pestañas para mantener la interfaz limpia
 tab1, tab2 = st.tabs(["11. Diagrama de Bloques", "12. Diagrama de Flujo de Proceso"])
 
 with tab1:
     st.subheader("Diagrama de Bloques (BFD)")
-    # Asegúrate de nombrar tu PDF generado en Plant 3D exactamente así o cambia el string
     mostrar_pdf("diagrama_bloques.pdf")
 
 with tab2:
     st.subheader("Diagrama de Flujo de Proceso (PFD)")
-    # Asegúrate de nombrar tu PDF generado en Plant 3D exactamente así o cambia el string
     mostrar_pdf("diagrama_flujo.pdf")
