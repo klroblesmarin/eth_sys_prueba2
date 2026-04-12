@@ -108,4 +108,4 @@ c4.metric("Comp. Etanol", f"{(producto.imass['Ethanol']/producto.F_mass)*100:.1f
 st.subheader("📈 Análisis Financiero")
 e1, e2, e3, e4 = st.columns(4)
 e1.metric("Costo Real", f"${econ['Costo_Real']:.2f} /kg")
-e2.metric("NPV",
+e2.metric("NPV")
