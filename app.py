@@ -4,6 +4,7 @@ import thermosteam as tmo
 import pandas as pd
 import google.generativeai as genai
 import base64 # Necesario para la visualización de PDFs
+import fitz # PyMuPDF: Necesario para renderizar PDFs evadiendo el bloqueo del navegador
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Simulador BioSTEAM & Tutor IA", layout="wide")
@@ -188,16 +189,39 @@ st.markdown("---")
 st.header("📐 Diagramas de Planta (Estándar ISO)")
 
 def mostrar_pdf(ruta_archivo):
-    """Función auxiliar para leer y renderizar un PDF en Streamlit mediante base64"""
+    """Función auxiliar para rasterizar un PDF a imagen usando PyMuPDF y asegurar su visualización"""
     try:
-        with open(ruta_archivo, "rb") as f:
-            base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+        # Abrir el documento PDF
+        doc = fitz.open(ruta_archivo)
         
-        # Incrustar PDF en HTML
-        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="700" type="application/pdf"></iframe>'
-        st.markdown(pdf_display, unsafe_allow_html=True)
+        # Renderizar cada página del PDF como una imagen
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            
+            # Matriz para aplicar zoom y mejorar la resolución de la imagen generada
+            mat = fitz.Matrix(2, 2) 
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Convertir los datos de la imagen a formato apto para Streamlit
+            img_bytes = pix.tobytes("png")
+            st.image(img_bytes, caption=f"Página {page_num + 1} - Renderizado desde Plant 3D", use_container_width=True)
+        
+        # Mantener el botón de descarga nativo como contingencia para los archivos fuente
+        with open(ruta_archivo, "rb") as f:
+            pdf_data = f.read()
+            
+        st.download_button(
+            label="⬇️ Descargar archivo original en PDF",
+            data=pdf_data,
+            file_name=ruta_archivo,
+            mime="application/pdf",
+            key=f"btn_{ruta_archivo}" # Llave única requerida por Streamlit para múltiples botones
+        )
+        
     except FileNotFoundError:
-        st.warning(f"⚠️ No se encontró el archivo: {ruta_archivo}. Verifica que esté en la misma carpeta que este script.")
+        st.warning(f"⚠️ No se encontró el archivo: {ruta_archivo}. Verifica que esté en la raíz del repositorio.")
+    except Exception as e:
+        st.error(f"❌ Error interno al renderizar el documento: {e}")
 
 # Uso de pestañas para mantener la interfaz limpia
 tab1, tab2 = st.tabs(["11. Diagrama de Bloques", "12. Diagrama de Flujo de Proceso"])
